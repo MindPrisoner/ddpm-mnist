@@ -50,8 +50,8 @@ def main():
 
             if i % 100 == 0:
                 print(f"Epoch [{epoch+1}/{epochs}] Batch [{i}/{len(dataloader)}] Loss: {loss.item():.4f}")
-            scheduler.step()
-            print(f"Epoch [{epoch + 1}/{epochs}] Learning Rate: {scheduler.get_last_lr()[0]:.8f}")
+        scheduler.step()
+        print(f"Epoch [{epoch + 1}/{epochs}] Learning Rate: {scheduler.get_last_lr()[0]:.8f}")
     torch.save(model.state_dict(), "outputs/ddpm_unet_mnist.pth")
     print("Training finished.")
 

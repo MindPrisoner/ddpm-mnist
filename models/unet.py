@@ -1,6 +1,5 @@
+import math
 import torch
-import torch.nn as nn
-
 import torch.nn as nn
 
 
@@ -17,25 +16,28 @@ class SinusoidalPositionEmbeddings(nn.Module):
         embeddings = time[:, None].float() * embeddings[None, :]
         embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
         return embeddings
-class TimeEmbedding(nn.Module):
-    def __init__(self, emb_dim):
+
+
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(1, emb_dim),
+            nn.Conv2d(in_channels, out_channels, 3, padding=1),
+            nn.GroupNorm(8, out_channels),
             nn.ReLU(),
-            nn.Linear(emb_dim, emb_dim)
+            nn.Conv2d(out_channels, out_channels, 3, padding=1),
+            nn.GroupNorm(8, out_channels),
+            nn.ReLU()
         )
 
-    def forward(self, t):
-        t = t.float().unsqueeze(-1)
-        return self.net(t)
+    def forward(self, x):
+        return self.net(x)
 
 
 class SimpleUNet(nn.Module):
     def __init__(self, time_dim=128):
         super().__init__()
 
-        # self.time_mlp = TimeEmbedding(time_dim)
         self.time_mlp = nn.Sequential(
             SinusoidalPositionEmbeddings(time_dim),
             nn.Linear(time_dim, time_dim),
@@ -43,54 +45,47 @@ class SimpleUNet(nn.Module):
             nn.Linear(time_dim, time_dim)
         )
 
-        self.down1 = nn.Sequential(
-            nn.Conv2d(1, 64, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, 3, padding=1),
-            nn.ReLU()
-        )
+        self.down1 = DoubleConv(1, 64)
+        self.pool1 = nn.MaxPool2d(2)
 
-        self.pool = nn.MaxPool2d(2)
+        self.down2 = DoubleConv(64, 128)
+        self.pool2 = nn.MaxPool2d(2)
 
-        self.down2 = nn.Sequential(
-            nn.Conv2d(64, 128, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, 3, padding=1),
-            nn.ReLU()
-        )
+        self.bottleneck = DoubleConv(128, 256)
 
-        self.up = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.up1 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.conv_up1 = DoubleConv(256, 128)
 
-        self.up_block = nn.Sequential(
-            nn.Conv2d(128, 64, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, 3, padding=1),
-            nn.ReLU()
-        )
+        self.up2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.conv_up2 = DoubleConv(128, 64)
 
         self.out = nn.Conv2d(64, 1, 1)
 
         self.time_to_64 = nn.Linear(time_dim, 64)
         self.time_to_128 = nn.Linear(time_dim, 128)
-
+        self.time_to_256 = nn.Linear(time_dim, 256)
 
     def forward(self, x, t):
         t_emb = self.time_mlp(t)
 
-        t1 = self.time_to_64(t_emb).unsqueeze(-1).unsqueeze(-1)
-        t2 = self.time_to_128(t_emb).unsqueeze(-1).unsqueeze(-1)
+        t64 = self.time_to_64(t_emb).unsqueeze(-1).unsqueeze(-1)
+        t128 = self.time_to_128(t_emb).unsqueeze(-1).unsqueeze(-1)
+        t256 = self.time_to_256(t_emb).unsqueeze(-1).unsqueeze(-1)
 
-        x1 = self.down1(x)
-        x1 = x1 + t1
+        x1 = self.down1(x) + t64
+        x2 = self.pool1(x1)
 
-        x2 = self.pool(x1)
-        x3 = self.down2(x2)
-        x3 = x3 + t2
+        x3 = self.down2(x2) + t128
+        x4 = self.pool2(x3)
 
-        x4 = self.up(x3)
-        x_cat = torch.cat([x4, x1], dim=1)
+        x5 = self.bottleneck(x4) + t256
 
-        out = self.up_block(x_cat)
-        out = self.out(out)
+        x = self.up1(x5)
+        x = torch.cat([x, x3], dim=1)
+        x = self.conv_up1(x)
 
-        return out
+        x = self.up2(x)
+        x = torch.cat([x, x1], dim=1)
+        x = self.conv_up2(x)
+
+        return self.out(x)
