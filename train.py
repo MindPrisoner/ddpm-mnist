@@ -14,8 +14,8 @@ def main():
     os.makedirs("outputs", exist_ok=True)
 
     batch_size = 128
-    epochs = 10
-    lr = 1e-3
+    epochs = 30
+    lr = 1e-4
 
     transform = transforms.Compose([
         transforms.ToTensor(),
@@ -26,7 +26,9 @@ def main():
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2)
 
     model = SimpleUNet().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    # optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
     mse = nn.MSELoss()
 
     diffusion = Diffusion(device=device)
@@ -43,11 +45,13 @@ def main():
 
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
             if i % 100 == 0:
                 print(f"Epoch [{epoch+1}/{epochs}] Batch [{i}/{len(dataloader)}] Loss: {loss.item():.4f}")
-
+            scheduler.step()
+            print(f"Epoch [{epoch + 1}/{epochs}] Learning Rate: {scheduler.get_last_lr()[0]:.8f}")
     torch.save(model.state_dict(), "outputs/ddpm_unet_mnist.pth")
     print("Training finished.")
 
